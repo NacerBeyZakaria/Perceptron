@@ -1,0 +1,4 @@
+numpy
+matplotlib
+pyqt5; platform_system == "Windows" or platform_system == "Linux" or platform_system == "Darwin"
+PySide6; extra == "fallback"
