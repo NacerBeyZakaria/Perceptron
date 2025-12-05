@@ -31,6 +31,7 @@ from ml.perceptron import Perceptron
 from ml.mlp import SimpleMLP
 from ml.utils import parse_custom_points, is_3d_dataset
 from ui.themes import DARK_THEME, LIGHT_THEME
+from ui.plot3d import show_mlp_3d_surface  # your helper file
 
 
 class PerceptronTrainerMainWindow(QWidget):
@@ -40,7 +41,7 @@ class PerceptronTrainerMainWindow(QWidget):
         self.resize(1200, 780)
 
         self.dark_mode = True  # default
-        self.model_mode = 'Perceptron'  # or 'MLP'
+        self.model_mode = 'Perceptron'  # or 'SimpleMLP'
 
         # Layouts
         main_layout = QHBoxLayout(self)
@@ -76,21 +77,22 @@ class PerceptronTrainerMainWindow(QWidget):
         params_group = QGroupBox('Parameters')
         params_layout = QVBoxLayout()
 
-        h1 = QHBoxLayout()
-        h1.addWidget(QLabel('w1:'))
-        self.w1_input = QLineEdit('0')
-        h1.addWidget(self.w1_input)
-        h1.addWidget(QLabel('w2:'))
-        self.w2_input = QLineEdit('0')
-        h1.addWidget(self.w2_input)
-        params_layout.addLayout(h1)
+        # Number of inputs spinbox
+        h_inputs = QHBoxLayout()
+        h_inputs.addWidget(QLabel('Number of inputs:'))
+        self.input_dim_spin = QSpinBox()
+        self.input_dim_spin.setRange(1, 3)   # increase max if needed
+        self.input_dim_spin.setValue(2)
+        self.input_dim_spin.valueChanged.connect(self.on_input_dim_change)
+        h_inputs.addWidget(self.input_dim_spin)
+        params_layout.addLayout(h_inputs)
 
-        h1b = QHBoxLayout()
-        h1b.addWidget(QLabel('w3 (optional):'))
-        self.w3_input = QLineEdit('0')
-        h1b.addWidget(self.w3_input)
-        params_layout.addLayout(h1b)
+        # Dynamic weights layout
+        self.weights_layout = QHBoxLayout()
+        self.weight_edits = []  # list[QLineEdit]
+        params_layout.addLayout(self.weights_layout)
 
+        # Bias and eta
         h2 = QHBoxLayout()
         h2.addWidget(QLabel('b:'))
         self.b_input = QLineEdit('0')
@@ -100,6 +102,7 @@ class PerceptronTrainerMainWindow(QWidget):
         h2.addWidget(self.eta_input)
         params_layout.addLayout(h2)
 
+        # Max epochs + threshold
         h3 = QHBoxLayout()
         h3.addWidget(QLabel('Max epochs:'))
         self.epochs_input = QSpinBox()
@@ -137,6 +140,12 @@ class PerceptronTrainerMainWindow(QWidget):
         self.theme_toggle = QPushButton('Toggle Theme')
         self.theme_toggle.clicked.connect(self.toggle_theme)
         btn_layout.addWidget(self.theme_toggle)
+
+        # New button: MLP 3D surface
+        self.plot3d_btn = QPushButton('MLP 3D Surface')
+        self.plot3d_btn.clicked.connect(self.on_plot_mlp_3d)
+        btn_layout.addWidget(self.plot3d_btn)
+
         control_layout.addLayout(btn_layout)
 
         # Table log
@@ -192,8 +201,35 @@ class PerceptronTrainerMainWindow(QWidget):
         # apply default theme
         self.apply_theme(self.dark_mode)
 
+        # initialize dynamic weight fields
+        self.on_input_dim_change(self.input_dim_spin.value())
+
         # ensure custom field enabled only when needed
         self.on_dataset_change(self.dataset_combo.currentText())
+
+    # -------------------- dynamic weights ---------------------
+    def on_input_dim_change(self, dim: int):
+        # clear existing widgets in weights_layout
+        while self.weights_layout.count():
+            item = self.weights_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        self.weight_edits = []
+
+        # create new labels + line edits
+        for i in range(dim):
+            label = QLabel(f"w{i+1}:")
+            edit = QLineEdit('0')
+            self.weights_layout.addWidget(label)
+            self.weights_layout.addWidget(edit)
+            self.weight_edits.append(edit)
+
+    def get_current_weights(self):
+        try:
+            return [float(e.text()) for e in self.weight_edits]
+        except ValueError:
+            raise ValueError("Weights must be numeric")
 
     # -------------------- theme ---------------------
     def apply_theme(self, dark: bool):
@@ -253,36 +289,32 @@ class PerceptronTrainerMainWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Dataset error", str(e))
             return
-        w1 = float(self.w1_input.text())
-        w2 = float(self.w2_input.text())
-        w3 = float(self.w3_input.text())
-        b = float(self.b_input.text())
-        eta = float(self.eta_input.text())
+
+        try:
+            w_list = self.get_current_weights()
+            b = float(self.b_input.text())
+            eta = float(self.eta_input.text())
+        except Exception as e:
+            QMessageBox.critical(self, "Param error", str(e))
+            return
+
+        input_dim = len(w_list)
+
+        # random init (respect input_dim)
         if self.random_init_cb.isChecked():
-            if is_3d_dataset(dataset):
-                w1 = np.random.uniform(-1, 1)
-                w2 = np.random.uniform(-1, 1)
-                w3 = np.random.uniform(-1, 1)
-                b = np.random.uniform(-1, 1)
-            else:
-                w1 = np.random.uniform(-1, 1)
-                w2 = np.random.uniform(-1, 1)
-                b = np.random.uniform(-1, 1)
+            w_list = [np.random.uniform(-1, 1) for _ in range(input_dim)]
+            b = np.random.uniform(-1, 1)
+
         if self.model_mode == 'Perceptron':
-            # choose dimension
-            if is_3d_dataset(dataset):
-                self.perceptron = Perceptron(w=[w1, w2, w3], b=b, eta=eta)
-            else:
-                self.perceptron = Perceptron(w=[w1, w2], b=b, eta=eta)
+            self.perceptron = Perceptron(w=w_list, b=b, eta=eta)
         else:
-            # simple MLP default: 2 hidden neurons
-            self.mlp = SimpleMLP(input_dim=3 if is_3d_dataset(dataset) else 2,
-                                 hidden_units=2, eta=eta)
-            # set initial weights if user provided numeric (mlp provides methods)
+            self.mlp = SimpleMLP(input_dim=input_dim, hidden_units=2, eta=eta)
+            # optional seeding from GUI weights
             try:
-                self.mlp.set_weights_from_flat([w1, w2, w3, b])
+                self.mlp.set_weights_from_flat(w_list + [b])
             except Exception:
                 pass
+
         self.table.setRowCount(0)
         self.fig_dec.clear()
         self.canvas_dec.draw()
@@ -296,8 +328,8 @@ class PerceptronTrainerMainWindow(QWidget):
 
     # single-step mode (per sample)
     def on_step(self):
-        # if no model initialized, do restart to create one
-        if (self.perceptron is None and self.model_mode == 'Perceptron') or (self.mlp is None and self.model_mode == 'SimpleMLP'):
+        if (self.perceptron is None and self.model_mode == 'Perceptron') or \
+           (self.mlp is None and self.model_mode == 'SimpleMLP'):
             self.on_restart()
         try:
             dataset = self.parse_dataset()
@@ -305,31 +337,30 @@ class PerceptronTrainerMainWindow(QWidget):
             QMessageBox.critical(self, "Dataset", str(e))
             return
 
-        # ensure we have history pointer
         if self.current_step_index == 0:
-            # clear previous logs when starting stepping
             self.table.setRowCount(0)
             self.epochs.clear()
             self.accuracies.clear()
             self.errors_per_epoch.clear()
 
-        # run one sample update
         if self.model_mode == 'Perceptron':
             per = self.perceptron
-            # pick sample in round-robin
-            idx = (self.current_step_index // 2) % len(dataset)  # each sample adds before+after => //2
+            idx = (self.current_step_index // 2) % len(dataset)
             x, y = dataset[idx]
             y_pred, net = per.predict(x, threshold_ge=(self.threshold_combo.currentIndex() == 0))
             err = y - y_pred
-            # record before and after, update weights
             per.history = getattr(per, 'history', [])
-            per.history.append({'sample_x': tuple(x.tolist()), 'y': int(y), 'net_before': net, 'err': int(err),
-                                'w_before': tuple(per.w.tolist()), 'b_before': float(per.b), 'phase': 'before'})
+            per.history.append({'sample_x': tuple(x.tolist()), 'y': int(y),
+                                'net_before': net, 'err': int(err),
+                                'w_before': tuple(per.w.tolist()),
+                                'b_before': float(per.b), 'phase': 'before'})
             if err != 0:
                 per.w = per.w + per.eta * err * x
                 per.b = per.b + per.eta * err
-            per.history.append({'sample_x': tuple(x.tolist()), 'y': int(y), 'net_before': None, 'err': int(err),
-                                'w_before': tuple(per.w.tolist()), 'b_before': float(per.b), 'phase': 'after'})
+            per.history.append({'sample_x': tuple(x.tolist()), 'y': int(y),
+                                'net_before': None, 'err': int(err),
+                                'w_before': tuple(per.w.tolist()),
+                                'b_before': float(per.b), 'phase': 'after'})
             rec = per.history[-2]
             self.append_record_to_table(rec)
             rec2 = per.history[-1]
@@ -346,7 +377,6 @@ class PerceptronTrainerMainWindow(QWidget):
         self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
         self.table.setItem(i, 1, QTableWidgetItem(rec.get('phase', '')))
         x1, x2 = (rec['sample_x'][0], rec['sample_x'][1]) if len(rec['sample_x']) >= 2 else (rec['sample_x'][0], 0)
-        # support optional x3
         x3 = rec['sample_x'][2] if len(rec['sample_x']) == 3 else ''
         self.table.setItem(i, 2, QTableWidgetItem(f"{x1:.3f}"))
         self.table.setItem(i, 3, QTableWidgetItem(f"{x2:.3f}"))
@@ -368,7 +398,6 @@ class PerceptronTrainerMainWindow(QWidget):
             QMessageBox.critical(self, "Dataset", str(e))
             return
 
-        # prepare model if missing
         if self.model_mode == 'Perceptron':
             if self.perceptron is None:
                 self.on_restart()
@@ -378,22 +407,19 @@ class PerceptronTrainerMainWindow(QWidget):
                 self.on_restart()
             model = self.mlp
 
-        # read params
         try:
             max_epochs = int(self.epochs_input.value())
             threshold_ge = (self.threshold_combo.currentIndex() == 0)
-            delay_ms = 80  # you can expose as input
+            delay_ms = 80
         except Exception as e:
             QMessageBox.critical(self, "Param error", str(e))
             return
 
-        # clear UI tables for fresh run
         self.table.setRowCount(0)
         self.epochs.clear()
         self.accuracies.clear()
         self.errors_per_epoch.clear()
 
-        # clear plots
         self.fig_dec.clear()
         self.canvas_dec.draw()
         self.fig_acc.clear()
@@ -403,36 +429,33 @@ class PerceptronTrainerMainWindow(QWidget):
         self.fig_w.clear()
         self.canvas_w.draw()
 
-        # training loop (small datasets => run in GUI thread, processEvents to stay responsive)
         if self.model_mode == 'Perceptron':
             per = model
             per.history = []
-            step_counter = 0
             for epoch in range(1, max_epochs + 1):
                 errors = 0
                 for x, y in dataset:
                     y_pred, net = per.predict(x, threshold_ge)
                     err = y - y_pred
-                    # before record
-                    rec_before = {'sample_x': tuple(x.tolist()), 'y': int(y), 'net_before': net, 'err': int(err),
-                                  'w_before': tuple(per.w.tolist()), 'b_before': float(per.b), 'phase': 'before'}
+                    rec_before = {'sample_x': tuple(x.tolist()), 'y': int(y),
+                                  'net_before': net, 'err': int(err),
+                                  'w_before': tuple(per.w.tolist()),
+                                  'b_before': float(per.b), 'phase': 'before'}
                     per.history.append(rec_before)
                     self.append_record_to_table(rec_before)
-                    # update
                     if err != 0:
                         per.w = per.w + per.eta * err * x
                         per.b = per.b + per.eta * err
                         errors += 1
-                    # after record
-                    rec_after = {'sample_x': tuple(x.tolist()), 'y': int(y), 'net_before': None, 'err': int(err),
-                                 'w_before': tuple(per.w.tolist()), 'b_before': float(per.b), 'phase': 'after'}
+                    rec_after = {'sample_x': tuple(x.tolist()), 'y': int(y),
+                                 'net_before': None, 'err': int(err),
+                                 'w_before': tuple(per.w.tolist()),
+                                 'b_before': float(per.b), 'phase': 'after'}
                     per.history.append(rec_after)
                     self.append_record_to_table(rec_after)
-                    # update plots
                     self.draw_current_model(per.w, per.b)
                     QCoreApplication.processEvents()
                     time.sleep(delay_ms / 1000.0)
-                # end epoch -> accuracy
                 correct = sum(1 for x, y in dataset if per.predict(x, threshold_ge)[0] == y)
                 acc = correct / len(dataset)
                 self.epochs.append(epoch)
@@ -444,40 +467,51 @@ class PerceptronTrainerMainWindow(QWidget):
                     break
             self.status_label.setText(f"Training finished. final w={tuple(per.w.tolist())}, b={per.b:.3f}")
         else:
-            # animated train for simple MLP using epoch callback
             mlp = model
-
-            # train (animated via callback)
-            mlp.train(dataset,
-                      max_epochs=max_epochs,
-                      callback=self.mlp_epoch_callback,
-                      report_every=1)
-
-            # after training, show final decision region (2D only)
+            mlp.train(dataset, max_epochs=max_epochs,
+                      callback=self.mlp_epoch_callback, report_every=1)
             try:
                 layers = mlp.get_layers()
                 self.draw_decision_region_heatmap(layers, grid_res=140)
             except Exception:
                 pass
-
             self.status_label.setText("MLP training finished")
+
+            # optionally auto-show 3D surface for 2D inputs
+            try:
+                X = np.array([x for x, y in dataset])
+                if X.shape[1] == 2:
+                    show_mlp_3d_surface(mlp, X, resolution=60)
+            except Exception:
+                pass
+
+    # ------------- extra UI action: 3D surface button --------------
+    def on_plot_mlp_3d(self):
+        if self.mlp is None:
+            QMessageBox.information(self, "MLP 3D surface",
+                                    "Train a SimpleMLP model first.")
+            return
+        try:
+            dataset = self.dataset_cache if self.dataset_cache is not None else self.parse_dataset()
+            X = np.array([x for x, y in dataset])
+            if X.shape[1] != 2:
+                QMessageBox.information(self, "MLP 3D surface",
+                                        "3D surface is only available for 2D inputs (x1, x2).")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Dataset error", str(e))
+            return
+
+        show_mlp_3d_surface(self.mlp, X, resolution=60)
 
     # ------------- drawing helpers --------------
     def mlp_epoch_callback(self, epoch, activations, losses, layers):
-        """
-        Called from mlp.train(...) each time the MLP finishes an epoch (or according to report_every).
-        - activations: [A0, A1, A2]
-        - losses: list of loss floats
-        - layers: [{'W': W1, 'b': b1}, {'W': W2, 'b': b2}]
-        """
-        # 1) update loss curve
         self.epochs.append(epoch)
-        self.accuracies.append(None)  # accuracy not used here; keep structure
+        self.accuracies.append(None)
         self.draw_loss_curve(losses)
 
-        # 2) activation heatmap for hidden layer (A1)
         if len(activations) > 1:
-            A1 = activations[1]  # shape (N, hidden_units)
+            A1 = activations[1]
             self.fig_act.clf()
             ax = self.fig_act.add_subplot(111)
             im = ax.imshow(A1.T, aspect='auto', cmap='viridis')
@@ -487,7 +521,6 @@ class PerceptronTrainerMainWindow(QWidget):
             self.fig_act.colorbar(im, ax=ax, fraction=0.05)
             self.canvas_act.draw()
 
-        # 3) weight heatmaps: show W1 and W2 as separate small images
         self.fig_w.clf()
         W1 = layers[0]['W']
         W2 = layers[1]['W']
@@ -497,7 +530,6 @@ class PerceptronTrainerMainWindow(QWidget):
         ax1.set_xlabel('input dim')
         ax1.set_ylabel('hidden unit')
         self.fig_w.colorbar(im1, ax=ax1, fraction=0.05)
-
         ax2 = self.fig_w.add_subplot(1, 2, 2)
         im2 = ax2.imshow(W2, aspect='auto', cmap='coolwarm')
         ax2.set_title('W2 (output weights)')
@@ -505,7 +537,6 @@ class PerceptronTrainerMainWindow(QWidget):
         self.fig_w.colorbar(im2, ax=ax2, fraction=0.05)
         self.canvas_w.draw()
 
-        # 4) update main decision-region heatmap incrementally if dataset 2D
         try:
             dataset = self.dataset_cache if self.dataset_cache is not None else self.parse_dataset()
             X = np.array([x for x, y in dataset])
@@ -518,15 +549,17 @@ class PerceptronTrainerMainWindow(QWidget):
         QCoreApplication.processEvents()
 
     def draw_current_model(self, w, b):
-        # w can be length 2 or 3
         self.fig_dec.clf()
-        ax = self.fig_dec.add_subplot(111, projection='3d' if len(w) == 3 else None)
+        if len(w) == 3:
+            ax = self.fig_dec.add_subplot(111, projection='3d')
+        else:
+            ax = self.fig_dec.add_subplot(111)
+
         dataset = self.dataset_cache if self.dataset_cache is not None else self.parse_dataset()
         pts = np.array([x for x, y in dataset])
         ys = np.array([y for x, y in dataset])
 
         if len(w) == 2:
-            # 2D scatter
             class0 = pts[ys == 0]
             class1 = pts[ys == 1]
             if len(class0) > 0:
@@ -535,7 +568,6 @@ class PerceptronTrainerMainWindow(QWidget):
                 ax.scatter(class1[:, 0], class1[:, 1], marker='s', s=80, edgecolors='k')
             ax.set_xlim(-0.5, 1.5)
             ax.set_ylim(-0.5, 1.5)
-            # decision line
             if abs(w[1]) > 1e-8:
                 xs = np.linspace(-0.5, 1.5, 200)
                 ys_line = (-w[0] * xs - b) / w[1]
@@ -545,11 +577,10 @@ class PerceptronTrainerMainWindow(QWidget):
                     x0 = -b / w[0]
                     ax.axvline(x0, linestyle='--', linewidth=2, color='#ffcc66')
             ax.set_title('2D decision boundary')
-        else:
-            # 3D plane
+        elif len(w) == 3:
             ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=ys, cmap='bwr', s=60)
-            # plane: w0*x + w1*y + w2*z + b = 0 -> z = (-w0*x - w1*y - b)/w2
-            xx, yy = np.meshgrid(np.linspace(-0.5, 1.5, 10), np.linspace(-0.5, 1.5, 10))
+            xx, yy = np.meshgrid(np.linspace(-0.5, 1.5, 10),
+                                 np.linspace(-0.5, 1.5, 10))
             if abs(w[2]) > 1e-8:
                 zz = (-w[0] * xx - w[1] * yy - b) / w[2]
                 ax.plot_surface(xx, yy, zz, alpha=0.3, color=(0.8, 0.6, 0.2))
@@ -557,11 +588,14 @@ class PerceptronTrainerMainWindow(QWidget):
             ax.set_ylim(-0.5, 1.5)
             ax.set_zlim(-0.5, 1.5)
             ax.set_title('3D decision plane')
+        else:
+            ax.text(0.5, 0.5,
+                    "Visualization only implemented for 2 or 3 inputs.",
+                    ha='center', va='center', transform=ax.transAxes)
 
         self.canvas_dec.draw()
 
     def draw_current_model_from_flat(self, wflat):
-        # placeholder: for MLP we don't have simple w/b; either draw hidden unit boundaries or skip
         self.fig_dec.clf()
         ax = self.fig_dec.add_subplot(111)
         ax.text(0.5, 0.5,
@@ -591,11 +625,6 @@ class PerceptronTrainerMainWindow(QWidget):
         self.canvas_acc.draw()
 
     def draw_decision_region_heatmap(self, layers, grid_res=120):
-        """
-        Draw decision region heatmap for current MLP layers.
-        layers: [{'W','b'}, {'W','b'}]
-        grid_res: resolution of grid (120 is fine for small datasets)
-        """
         W1 = layers[0]['W']
         b1 = layers[0]['b']
         W2 = layers[1]['W']
@@ -605,7 +634,7 @@ class PerceptronTrainerMainWindow(QWidget):
         X = np.array([x for x, y in dataset])
         ys = np.array([y for x, y in dataset])
         if X.shape[1] != 2:
-            return  # heatmap only for 2D inputs
+            return
 
         x_min, x_max = X[:, 0].min() - 0.5, X[:, 0].max() + 0.5
         y_min, y_max = X[:, 1].min() - 0.5, X[:, 1].max() + 0.5
@@ -613,16 +642,13 @@ class PerceptronTrainerMainWindow(QWidget):
                              np.linspace(y_min, y_max, grid_res))
         grid = np.c_[xx.ravel(), yy.ravel()]
 
-        # forward with sigmoid
         Z1 = sigmoid(grid.dot(W1.T) + b1)
         Z2 = sigmoid(Z1.dot(W2.T) + b2)
         Z = Z2.reshape(xx.shape)
 
-        # plot heatmap
         self.fig_dec.clf()
         ax = self.fig_dec.add_subplot(111)
-        cf = ax.contourf(xx, yy, Z, levels=30, cmap='coolwarm')
-        # overlay training points
+        ax.contourf(xx, yy, Z, levels=30, cmap='coolwarm', alpha=0.8)
         ax.scatter(X[ys == 0, 0], X[ys == 0, 1], marker='o', edgecolors='k', label='class 0')
         ax.scatter(X[ys == 1, 0], X[ys == 1, 1], marker='s', edgecolors='k', label='class 1')
         ax.legend()
